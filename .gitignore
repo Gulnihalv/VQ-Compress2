@@ -3,3 +3,5 @@
 /models/__pycache__
 /utils/__pycache__
 /ana_yapı.txt
+/.gitignore
+/.DS_Store

@@ -178,7 +178,7 @@ TRAINING_STRATEGY = {
 # Test/değerlendirme yapılandırması
 EVAL_CONFIG = {
     "batch_size": 12,  # Perceptual loss hesabı için daha düşük
-    "metrics": ["psnr", "ms_ssim", "bpp", "lpips"]  # LPIPS eklendi ama methodu yok henüz
+    "metrics": ["psnr", "ms_ssim", "bpp"]
 }
 
 # Sıkıştırma yapılandırması

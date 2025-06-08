@@ -62,7 +62,7 @@ def main():
     with torch.no_grad():
         recon_tensor, indices, logits, _ = model(input_tensor)
         
-        # Metrikleri hesaplamadan önce orijinal boyuta geri kırp ---
+        # Metrikleri hesaplamadan önce orijinal boyuta geri kırp
         original_h, original_w = original_dims
         # Yeniden yapılandırılmış görüntüden padding'i kırp
         recon_cropped = recon_tensor[:, :, :original_h, :original_w]

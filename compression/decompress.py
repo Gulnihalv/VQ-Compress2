@@ -40,7 +40,7 @@ def main():
     parser.add_argument('--output_path', type=str, default='reconstructed_final.png', help='Yeniden oluşturulan görüntünün dosya yolu.')
     args = parser.parse_args()
 
-    device = torch.device("cpu")
+    device = torch.device("mps")
     
     # Modeli yükle
     model = create_model().to(device)
@@ -66,7 +66,8 @@ def main():
         entropy_model=model.entropy_model,
         batch_size=1, # Tek bir görüntü işliyoruz
         spatial_shape=(original_h // model.encoder.downsampling_rate, 
-                       original_w // model.encoder.downsampling_rate)
+                       original_w // model.encoder.downsampling_rate),
+        device=device
     ).to(device)
     
     with torch.no_grad():

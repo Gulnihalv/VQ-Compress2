@@ -213,13 +213,15 @@ class ArithmeticCoder:
         
         # Batch verilerini birleştir
         return self._pack_batch_data(encoded_batches, spatial_shape)
-    
 
     def decode_with_model(self, encoded_data: bytes, entropy_model, 
-                         batch_size: int, spatial_shape: Tuple[int, int]) -> torch.Tensor:
+                         batch_size: int, spatial_shape: Tuple[int, int], device=None) -> torch.Tensor:
         """
         Entropy model kullanarak kodlanmış veriyi çöz
         """
+        if device is None:
+            device = torch.device("cpu")
+
         if not encoded_data:
             h, w = spatial_shape
             return torch.zeros((batch_size, h * w), dtype=torch.long)
@@ -242,68 +244,50 @@ class ArithmeticCoder:
             if not encoded_bits:
                 decoded_batches.append(torch.zeros(h * w, dtype=torch.long))
                 continue
+
+            CONTEXT_WINDOW_SIZE = 1024
             
-            current_indices = torch.zeros((1, h * w), dtype=torch.long)
-            decoded_symbols = []
+            current_indices = torch.zeros(num_symbols, dtype=torch.long, device=device)
             
-            low = 0
-            high = self.max_value
-            value = 0
-            
+            low, high, value, bit_index = 0, self.max_value, 0, self.precision_bits
             for i in range(min(self.precision_bits, len(encoded_bits))):
                 value = (value << 1) | encoded_bits[i]
-            
-            bit_index = self.precision_bits
             
             pbar = tqdm(range(num_symbols), desc=f"Decoding Symbols (Batch {b+1}/{batch_size})", leave=False)
             
             for pos in pbar:
-                
-                current_indices[0, :len(decoded_symbols)] = torch.tensor(decoded_symbols, dtype=torch.long)
-                
-                with torch.no_grad():
-                    try:
-                        probs_logits = entropy_model(current_indices)
-                        pos_probs_tensor = F.softmax(probs_logits[0, pos], dim=-1)
+
+                if pos == 0:
+                    # İLK SEMBOL: Henüz bir bağlam yok.
+                    # Bu nedenle, model çağırmak yerine uniform olasılık kullanıyoruz.
+                    pos_probs = np.ones(self.num_embeddings, dtype=np.float64) / self.num_embeddings
+                else:
+                    # Sadece son `CONTEXT_WINDOW_SIZE` kadar sembolü al.
+                    start_pos = max(0, pos - CONTEXT_WINDOW_SIZE)
+                    context_tensor = current_indices[start_pos:pos].unsqueeze(0) # [1, degisken_uzunluk]
+
+                    with torch.no_grad():
+                        # entropy_model'e doğrudan `current_indices` verilir.
+                        probs_logits = entropy_model(context_tensor)
+                        pos_probs_tensor = F.softmax(probs_logits[0, -1], dim=-1)
                         pos_probs = self._normalize_probabilities(pos_probs_tensor)
-                    except:
-                        pos_probs = np.ones(self.num_embeddings) / self.num_embeddings
                 
-                try:
-                    symbol, low, high = self._decode_symbol_with_probs(
-                        pos_probs, value, low, high)
-                except Exception as e:
-                    logging.warning(f"Decoding error at position {pos}: {e}")
-                    symbol = 0
-                
-                decoded_symbols.append(symbol)
+                symbol, low, high = self._decode_symbol_with_probs(pos_probs, value, low, high)  
+                current_indices[pos] = symbol
                 
                 while True:
                     if high < self.half: pass
                     elif low >= self.half:
-                        value -= self.half
-                        low -= self.half
-                        high -= self.half
+                        value -= self.half; low -= self.half; high -= self.half
                     elif low >= self.quarter and high < self.three_quarter:
-                        value -= self.quarter
-                        low -= self.quarter
-                        high -= self.quarter
+                        value -= self.quarter; low -= self.quarter; high -= self.quarter
                     else: break
-                    
-                    low = 2 * low
-                    high = 2 * high + 1
-                    value = 2 * value
-                    
+                    low <<= 1; high <<= 1; high |= 1; value <<= 1
                     if bit_index < len(encoded_bits):
                         value |= encoded_bits[bit_index]
                         bit_index += 1
             
-            decoded_tensor = torch.tensor(decoded_symbols[:h*w], dtype=torch.long)
-            if len(decoded_tensor) < h * w:
-                padding = torch.zeros(h * w - len(decoded_tensor), dtype=torch.long)
-                decoded_tensor = torch.cat([decoded_tensor, padding])
-            
-            decoded_batches.append(decoded_tensor)
+            decoded_batches.append(current_indices)
         
         result = torch.stack(decoded_batches, dim=0)
         return result

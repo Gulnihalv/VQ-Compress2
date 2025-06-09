@@ -119,41 +119,28 @@ class ArithmeticCoder:
             new_high = new_low + 1
         
         return symbol, new_low, new_high
-    
+
     def encode_with_model(self, indices: torch.Tensor, entropy_model, 
-                         spatial_shape: Tuple[int, int]) -> bytes:
+                         spatial_shape: Tuple[int, int], device=None) -> bytes:
         """
-        Entropy model kullanarak VQ indekslerini kodla
-        
-        Args:
-            indices: VQ indices tensor [B, H*W]
-            entropy_model: Trained entropy model
-            spatial_shape: (H, W) spatial dimensions
+        Entropy model kullanarak VQ indekslerini auto-regressive olarak kodla
         """
+        if device is None:
+            device = torch.device("cpu")
+
         if indices.numel() == 0:
             return b''
         
         batch_size = indices.shape[0]
         h, w = spatial_shape
+        num_symbols = h * w
         
-        # Her sample için ayrı ayrı kodla
         encoded_batches = []
         
         for b in range(batch_size):
-            sample_indices = indices[b].flatten()  # [H*W]
-            
-            # Entropy model'den olasılık dağılımlarını al
-            with torch.no_grad():
-                # Model'e batch dimension ekle
-                model_input = indices[b:b+1]  # [1, H*W]
-                probs_logits = entropy_model(model_input)  # [1, H*W, num_embeddings]
-                probs_tensor = F.softmax(probs_logits[0], dim=-1)  # [H*W, num_embeddings]
-            
-            # Her pozisyon için ayrı kodlama
+            sample_indices = indices[b].flatten()
             encoded_bits = []
-            low = 0
-            high = self.max_value
-            pending_bits = 0
+            low, high, pending_bits = 0, self.max_value, 0
             
             def output_bit(bit):
                 nonlocal pending_bits
@@ -162,48 +149,52 @@ class ArithmeticCoder:
                     encoded_bits.append(1 - bit)
                 pending_bits = 0
             
-            # Her sembolü sırayla kodla
-            for pos in range(len(sample_indices)):
+            CONTEXT_WINDOW_SIZE = 1024
+            
+            pbar = tqdm(range(num_symbols), desc=f"Encoding Symbols (Batch {b+1}/{batch_size})", leave=False)
+
+            for pos in pbar:
                 symbol = sample_indices[pos].item()
                 
-                # Bu pozisyon için olasılık dağılımı
-                pos_probs = self._normalize_probabilities(probs_tensor[pos])
+                # Olasılıkları adım adım al
+                with torch.no_grad():
+                    if pos == 0:
+                        # İlk sembol için uniform olasılık
+                        pos_probs = np.ones(self.num_embeddings, dtype=np.float64) / self.num_embeddings
+                    else:
+                        # Sonraki semboller için bağlam penceresi kullan
+                        start_pos = max(0, pos - CONTEXT_WINDOW_SIZE)
+                        # Dikkat: bağlam, o anki pozisyona kadar olan indeksleri içerir
+                        context_tensor = sample_indices[start_pos:pos].unsqueeze(0).to(device)
+                        
+                        probs_logits = entropy_model(context_tensor)
+                        pos_probs_tensor = F.softmax(probs_logits[0, -1], dim=-1)
+                        pos_probs = self._normalize_probabilities(pos_probs_tensor)
                 
-                # Sembolü kodla
-                try:
-                    low, high = self._encode_symbol_with_probs(symbol, pos_probs, low, high)
-                except Exception as e:
-                    logging.warning(f"Encoding error at position {pos}, symbol {symbol}: {e}")
-                    # Fallback: uniform distribution
-                    uniform_probs = np.ones(self.num_embeddings) / self.num_embeddings
-                    low, high = self._encode_symbol_with_probs(symbol, uniform_probs, low, high)
+                # Sembolü bu anlık olasılıklarla kodla
+                low, high = self._encode_symbol_with_probs(symbol, pos_probs, low, high)
                 
-                # Renormalization
+                # Renormalizasyon
                 while True:
                     if high < self.half:
                         output_bit(0)
                     elif low >= self.half:
                         output_bit(1)
-                        low -= self.half
-                        high -= self.half
+                        low -= self.half; high -= self.half
                     elif low >= self.quarter and high < self.three_quarter:
                         pending_bits += 1
-                        low -= self.quarter
-                        high -= self.quarter
+                        low -= self.quarter; high -= self.quarter
                     else:
                         break
-                    
-                    low = 2 * low
-                    high = 2 * high + 1
+                    low <<= 1; high <<= 1; high |= 1
             
-            # Son bitleri çıkar
+            # Döngüden sonraki son bitleri çıkarma ve byte'a çevirme kısmı aynı
             pending_bits += 1
             if low < self.quarter:
                 output_bit(0)
             else:
                 output_bit(1)
-            
-            # Bits to bytes
+
             encoded_bytes = self._bits_to_bytes(encoded_bits)
             encoded_batches.append({
                 'data': encoded_bytes,
@@ -211,7 +202,6 @@ class ArithmeticCoder:
                 'num_symbols': len(sample_indices)
             })
         
-        # Batch verilerini birleştir
         return self._pack_batch_data(encoded_batches, spatial_shape)
 
     def decode_with_model(self, encoded_data: bytes, entropy_model, 

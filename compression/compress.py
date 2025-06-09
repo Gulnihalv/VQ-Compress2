@@ -53,7 +53,7 @@ def main():
     parser.add_argument('--output_path', type=str, default='compressed.vqvae', help='Sıkıştırılmış çıktının dosya yolu.')
     args = parser.parse_args()
 
-    device = torch.device("cpu") # Sıkıştırma için CPU yeterli
+    device = torch.device("mps")
     
     # Modeli yükle
     model = create_model().to(device)
@@ -79,7 +79,8 @@ def main():
         indices=indices,
         entropy_model=model.entropy_model,
         spatial_shape=(original_dims[0] // model.encoder.downsampling_rate, 
-                       original_dims[1] // model.encoder.downsampling_rate)
+                       original_dims[1] // model.encoder.downsampling_rate),
+        device=device
     )
 
     skip_features_dict = {f'skip_{i}': s.cpu() for i, s in enumerate(skip_features)}

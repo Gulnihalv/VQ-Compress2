@@ -4,9 +4,11 @@ import json
 import argparse
 import zipfile
 import io
+import os
 from compression.arithmetic_coding import ArithmeticCoder
 from train import create_model
-from utils import save_image
+from utils import save_image, psnr
+from inference import preprocess_image_rectangular
 
 def decompress_from_archive(archive_path: str) -> dict:
     """Arşivden tüm veriyi okur ve bir sözlük olarak döndürür."""
@@ -35,12 +37,14 @@ def decompress_from_archive(archive_path: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Sıkıştırılmış dosyadan görüntüyü yeniden oluşturur.")
+    parser.add_argument('--original_image_path', type=str, required=True, help='Karşılaştırma için orijinal görüntünün yolu.')
     parser.add_argument('--model_path', type=str, required=True, help='Eğitilmiş modelin (.pth) yolu.')
     parser.add_argument('--input_path', type=str, required=True, help='Sıkıştırılmış dosyanın (.vqvae) yolu.')
     parser.add_argument('--output_path', type=str, default='reconstructed_final.png', help='Yeniden oluşturulan görüntünün dosya yolu.')
     args = parser.parse_args()
 
-    device = torch.device("mps")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Kullanılan Cihaz: {device}")
     
     # Modeli yükle
     model = create_model().to(device)
@@ -84,6 +88,28 @@ def main():
         
         # Orijinal boyuta geri kırp
         recon_cropped = recon_padded[:, :, :original_h, :original_w]
+
+    # PSNR için orijinal görüntüyü yükle
+    original_tensor, _ = preprocess_image_rectangular(args.original_image_path, model.encoder.downsampling_rate)
+    original_tensor = original_tensor[:, :, :original_h, :original_w].to(device) # Boyutları eşitle ve cihaza taşı
+
+    # 1. PSNR'ı hesapla
+    psnr_value = psnr(original_tensor, recon_cropped)
+    
+    # 2. Gerçek dosya boyutundan Efektif BPP'yi hesapla
+    compressed_file_size_bytes = os.path.getsize(args.input_path)
+    num_pixels = original_w * original_h
+    effective_bpp = (compressed_file_size_bytes * 8) / num_pixels
+
+    # 3. Gerçek sıkıştırma oranını hesapla (isteğe bağlı)
+    original_file_size_bytes = os.path.getsize(args.original_image_path)
+    compression_ratio = original_file_size_bytes / compressed_file_size_bytes
+
+    print("\n--- Gerçek Dünya Performans Metrikleri ---")
+    print(f"PSNR: {psnr_value:.2f} dB")
+    print(f"Efektif BPP (Dosya Boyutundan): {effective_bpp:.4f}")
+    print(f"Sıkıştırma Oranı (Orijinal PNG'ye göre): {compression_ratio:.2f}x")
+    print("-------------------------------------------\n")
 
     # Sonucu kaydet
     save_image(recon_cropped, args.output_path)

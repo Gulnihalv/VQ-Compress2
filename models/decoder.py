@@ -4,9 +4,6 @@ import torch.nn.functional as F
 from utils.helper_models import ResidualBlock, SelfAttention
 
 class Decoder(nn.Module):
-    """
-    Skip connection'lar olmadığında da çalışabilen decoder
-    """
     def __init__(self, out_channels=3, latent_channels=192, num_layers=3, 
                  post_vq_layers=0, downsampling_rate=8, use_attention=True,
                  encoder_channels=None):

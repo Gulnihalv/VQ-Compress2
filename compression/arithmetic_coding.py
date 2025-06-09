@@ -120,10 +120,13 @@ class ArithmeticCoder:
         
         return symbol, new_low, new_high
 
+    # arithmetic_coding.py -> ArithmeticCoder sınıfı içindeki bu fonksiyonu güncelleyin
+
     def encode_with_model(self, indices: torch.Tensor, entropy_model, 
                          spatial_shape: Tuple[int, int], device=None) -> bytes:
         """
-        Entropy model kullanarak VQ indekslerini auto-regressive olarak kodla
+        Entropy model kullanarak VQ indekslerini, decode ile simetrik,
+        auto-regressive bir şekilde kodlar.
         """
         if device is None:
             device = torch.device("cpu")
@@ -156,7 +159,6 @@ class ArithmeticCoder:
             for pos in pbar:
                 symbol = sample_indices[pos].item()
                 
-                # Olasılıkları adım adım al
                 with torch.no_grad():
                     if pos == 0:
                         # İlk sembol için uniform olasılık
@@ -164,7 +166,6 @@ class ArithmeticCoder:
                     else:
                         # Sonraki semboller için bağlam penceresi kullan
                         start_pos = max(0, pos - CONTEXT_WINDOW_SIZE)
-                        # Dikkat: bağlam, o anki pozisyona kadar olan indeksleri içerir
                         context_tensor = sample_indices[start_pos:pos].unsqueeze(0).to(device)
                         
                         probs_logits = entropy_model(context_tensor)
@@ -188,7 +189,7 @@ class ArithmeticCoder:
                         break
                     low <<= 1; high <<= 1; high |= 1
             
-            # Döngüden sonraki son bitleri çıkarma ve byte'a çevirme kısmı aynı
+            # Son bitleri çıkar
             pending_bits += 1
             if low < self.quarter:
                 output_bit(0)

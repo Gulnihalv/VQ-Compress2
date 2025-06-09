@@ -4,6 +4,7 @@ import io
 import json
 import argparse
 import zipfile
+import os
 from compression.arithmetic_coding import ArithmeticCoder
 from train import create_model
 from inference import preprocess_image_rectangular
@@ -12,6 +13,9 @@ def compress_to_archive(indices_data: bytes,
                         skip_features: dict, 
                         original_dims: tuple, 
                         output_path: str):
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
     """Tüm veriyi tek bir .tar.gz arşivine sıkıştırarak kaydeder."""
     with tarfile.open(output_path, "w:gz") as tar:
         # 1. Meta veriyi (orijinal boyutlar) JSON olarak kaydet
